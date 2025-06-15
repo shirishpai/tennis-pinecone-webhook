@@ -29,7 +29,7 @@ def store_vector():
         if not data:
             return jsonify({'error': 'No data received'}), 400
             
-        logger.info(f"Parsed data: {json.dumps(data, indent=2)}")
+        logger.info(f"Parsed data keys: {list(data.keys())}")
         
         # Initialize Pinecone
         api_key = os.environ.get('PINECONE_API_KEY')
@@ -67,26 +67,32 @@ def store_vector():
         
         logger.info(f"Processed embedding: {len(embedding)} dimensions")
         
-        # Prepare metadata
+        # Helper function to truncate long fields for Pinecone limits
+        def truncate_field(value, max_length=1000):
+            if isinstance(value, str) and len(value) > max_length:
+                return value[:max_length] + "..."
+            return value
+        
+        # Prepare metadata with length limits for Pinecone
         metadata = {
             'content_id': data.get('content_id', ''),
-            'short_summary': data.get('short_summary', ''),
-            'key_takeaways': data.get('key_takeaways', ''),
-            'detailed_analysis': data.get('detailed_analysis', ''),
-            'tennis_topics': data.get('tennis_topics', ''),
-            'coaching_style': data.get('coaching_style', ''),
-            'skill_level': data.get('skill_level', ''),
-            'player_references': data.get('player_references', ''),
-            'common_problems': data.get('common_problems', ''),
-            'key_tags': data.get('key_tags', ''),
-            'equipment_required': data.get('equipment_required', ''),
-            'time_investment': data.get('time_investment', ''),
-            'solutions_provided': data.get('solutions_provided', ''),
-            'user_keywords': data.get('user_keywords', ''),
-            'immediate_actionable': data.get('immediate_actionable', ''),
-            'video_title': data.get('video_title', ''),
-            'full_transcript': data.get('full_transcript', ''),
-            'content_text': data.get('content_text', ''),
+            'short_summary': truncate_field(data.get('short_summary', ''), 500),
+            'key_takeaways': truncate_field(data.get('key_takeaways', ''), 500),
+            'detailed_analysis': truncate_field(data.get('detailed_analysis', ''), 800),
+            'tennis_topics': truncate_field(data.get('tennis_topics', ''), 200),
+            'coaching_style': truncate_field(data.get('coaching_style', ''), 100),
+            'skill_level': truncate_field(data.get('skill_level', ''), 50),
+            'player_references': truncate_field(data.get('player_references', ''), 200),
+            'common_problems': truncate_field(data.get('common_problems', ''), 300),
+            'key_tags': truncate_field(data.get('key_tags', ''), 200),
+            'equipment_required': truncate_field(data.get('equipment_required', ''), 100),
+            'time_investment': truncate_field(data.get('time_investment', ''), 50),
+            'solutions_provided': truncate_field(data.get('solutions_provided', ''), 400),
+            'user_keywords': truncate_field(data.get('user_keywords', ''), 200),
+            'immediate_actionable': truncate_field(data.get('immediate_actionable', ''), 300),
+            'video_title': truncate_field(data.get('video_title', ''), 100),
+            'full_transcript': truncate_field(data.get('full_transcript', ''), 1000),
+            'content_text': truncate_field(data.get('content_text', ''), 1000),
             'youtube_url': data.get('youtube_url', '')
         }
         
@@ -95,6 +101,7 @@ def store_vector():
         vector_id = f"tennis-{content_id}"
         
         logger.info(f"Storing vector with ID: {vector_id}")
+        logger.info(f"Metadata fields: {len(metadata)}")
         
         # Store vector in Pinecone
         index.upsert(vectors=[(vector_id, embedding, metadata)])
