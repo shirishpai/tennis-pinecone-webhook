@@ -19,7 +19,7 @@ def store_vector():
         logger.info(f"Raw data: {request.get_data(as_text=True)}")
         
         try:
-            data = request.get_json(force=True)
+            data = request.form.to_dict()
         except Exception as json_error:
             logger.error(f"JSON parsing error: {json_error}")
             return jsonify({'error': f'Invalid JSON: {json_error}'}), 400
