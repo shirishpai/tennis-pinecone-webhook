@@ -18,18 +18,44 @@ def health():
 def store_vector():
     try:
         logger.info(f"Content-Type: {request.content_type}")
-        logger.info(f"Raw data: {request.get_data(as_text=True)}")
+        raw_data = request.get_data(as_text=True)
+        logger.info(f"Raw data length: {len(raw_data)}")
+        logger.info(f"Raw data preview: {raw_data[:200]}...")
         
+        # Try multiple parsing approaches
+        data = None
+        
+        # Approach 1: Standard JSON
         try:
             data = request.get_json(force=True)
-        except Exception as json_error:
-            logger.error(f"JSON parsing error: {json_error}")
-            return jsonify({'error': f'Invalid JSON: 400 Bad Request: The browser (or proxy) sent a request that this server could not understand.'}), 400
-        
-        if not data:
-            return jsonify({'error': 'No data received'}), 400
+            logger.info("Successfully parsed as JSON")
+        except Exception as e:
+            logger.info(f"JSON parsing failed: {e}")
             
-        logger.info(f"Parsed data keys: {list(data.keys())}")
+        # Approach 2: Form data
+        if data is None:
+            try:
+                data = request.form.to_dict()
+                logger.info("Successfully parsed as form data")
+                # Convert embedding string to array if needed
+                if 'embedding' in data and isinstance(data['embedding'], str):
+                    data['embedding'] = [float(x.strip()) for x in data['embedding'].split(',') if x.strip()]
+            except Exception as e:
+                logger.info(f"Form parsing failed: {e}")
+                
+        # Approach 3: Manual JSON parse
+        if data is None:
+            try:
+                data = json.loads(raw_data)
+                logger.info("Successfully parsed raw JSON")
+            except Exception as e:
+                logger.info(f"Raw JSON parsing failed: {e}")
+                
+        if data is None:
+            logger.error("All parsing methods failed")
+            return jsonify({'error': 'Could not parse request data'}), 400
+            
+        logger.info(f"Successfully parsed data with keys: {list(data.keys())}")
         
         # Initialize Pinecone
         api_key = os.environ.get('PINECONE_API_KEY')
@@ -67,33 +93,22 @@ def store_vector():
         
         logger.info(f"Processed embedding: {len(embedding)} dimensions")
         
-        # Helper function to truncate long fields for Pinecone limits
-        def truncate_field(value, max_length=1000):
-            if isinstance(value, str) and len(value) > max_length:
-                return value[:max_length] + "..."
-            return value
+        # Helper function to safely get and truncate fields
+        def safe_truncate(value, max_length=500):
+            if value is None:
+                return ''
+            str_value = str(value)
+            if len(str_value) > max_length:
+                return str_value[:max_length] + "..."
+            return str_value
         
-        # Prepare metadata with length limits for Pinecone
+        # Minimal essential metadata to ensure success
         metadata = {
-            'content_id': data.get('content_id', ''),
-            'short_summary': truncate_field(data.get('short_summary', ''), 500),
-            'key_takeaways': truncate_field(data.get('key_takeaways', ''), 500),
-            'detailed_analysis': truncate_field(data.get('detailed_analysis', ''), 800),
-            'tennis_topics': truncate_field(data.get('tennis_topics', ''), 200),
-            'coaching_style': truncate_field(data.get('coaching_style', ''), 100),
-            'skill_level': truncate_field(data.get('skill_level', ''), 50),
-            'player_references': truncate_field(data.get('player_references', ''), 200),
-            'common_problems': truncate_field(data.get('common_problems', ''), 300),
-            'key_tags': truncate_field(data.get('key_tags', ''), 200),
-            'equipment_required': truncate_field(data.get('equipment_required', ''), 100),
-            'time_investment': truncate_field(data.get('time_investment', ''), 50),
-            'solutions_provided': truncate_field(data.get('solutions_provided', ''), 400),
-            'user_keywords': truncate_field(data.get('user_keywords', ''), 200),
-            'immediate_actionable': truncate_field(data.get('immediate_actionable', ''), 300),
-            'video_title': truncate_field(data.get('video_title', ''), 100),
-            'full_transcript': truncate_field(data.get('full_transcript', ''), 1000),
-            'content_text': truncate_field(data.get('content_text', ''), 1000),
-            'youtube_url': data.get('youtube_url', '')
+            'content_id': safe_truncate(data.get('content_id', ''), 100),
+            'short_summary': safe_truncate(data.get('short_summary', ''), 300),
+            'tennis_topics': safe_truncate(data.get('tennis_topics', ''), 200),
+            'skill_level': safe_truncate(data.get('skill_level', ''), 50),
+            'coaching_style': safe_truncate(data.get('coaching_style', ''), 100)
         }
         
         # Create vector ID
@@ -101,12 +116,12 @@ def store_vector():
         vector_id = f"tennis-{content_id}"
         
         logger.info(f"Storing vector with ID: {vector_id}")
-        logger.info(f"Metadata fields: {len(metadata)}")
+        logger.info(f"Metadata: {metadata}")
         
         # Store vector in Pinecone
         index.upsert(vectors=[(vector_id, embedding, metadata)])
         
-        logger.info("Vector stored successfully in Pinecone")
+        logger.info("Vector stored successfully in Pinecone!")
         
         return jsonify({
             'status': 'success',
