@@ -1,9 +1,9 @@
 from flask import Flask, request, jsonify
 import os
 import json
+import requests
 from pinecone import Pinecone
 import logging
-import re
 
 app = Flask(__name__)
 
@@ -24,21 +24,11 @@ def store_vector():
         
         # Try to fix common JSON issues
         try:
-            # First attempt: direct parsing
             data = json.loads(raw_data)
             logger.info("Successfully parsed JSON directly")
         except json.JSONDecodeError as e:
             logger.info(f"Direct JSON parsing failed: {e}")
-            try:
-                # Second attempt: fix common issues
-                fixed_data = raw_data.replace('\\"', '"').replace("'", "\\'")
-                # Remove any problematic characters
-                fixed_data = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', fixed_data)
-                data = json.loads(fixed_data)
-                logger.info("Successfully parsed JSON after fixing")
-            except:
-                logger.error("JSON parsing completely failed")
-                return jsonify({'error': 'JSON parsing failed'}), 400
+            return jsonify({'error': 'JSON parsing failed'}), 400
             
         logger.info(f"Data keys: {list(data.keys())}")
         
@@ -68,7 +58,7 @@ def store_vector():
         # Simple metadata
         metadata = {
             'content_id': str(data.get('content_id', 'unknown')),
-            'summary': str(data.get('short_summary', ''))[:200]  # Truncate to avoid issues
+            'summary': str(data.get('short_summary', ''))[:200]
         }
         
         # Create vector ID
@@ -90,6 +80,121 @@ def store_vector():
         
     except Exception as e:
         logger.error(f"Error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/process-airtable', methods=['GET', 'POST'])
+def process_airtable():
+    """
+    Complete Airtable → OpenAI → Pinecone processing
+    """
+    try:
+        logger.info("Starting Airtable processing...")
+        
+        # Airtable configuration
+        AIRTABLE_BASE_ID = "appEa8P6iWB6YTqyE"  # Your Tennis Coaching Database
+        AIRTABLE_TABLE = "Tennis Knowledge Database"
+        AIRTABLE_API_KEY = os.environ.get('AIRTABLE_API_KEY')
+        OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+        PINECONE_API_KEY = os.environ.get('PINECONE_API_KEY')
+        
+        if not all([AIRTABLE_API_KEY, OPENAI_API_KEY, PINECONE_API_KEY]):
+            return jsonify({'error': 'Missing API keys. Please set AIRTABLE_API_KEY, OPENAI_API_KEY, and PINECONE_API_KEY environment variables.'}), 500
+        
+        # Get records from Airtable
+        airtable_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE}"
+        headers = {
+            'Authorization': f'Bearer {AIRTABLE_API_KEY}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Fetch records (limit to 5 for testing)
+        params = {'maxRecords': 5}
+        response = requests.get(airtable_url, headers=headers, params=params)
+        
+        if response.status_code != 200:
+            logger.error(f"Airtable API error: {response.text}")
+            return jsonify({'error': f'Airtable API error: {response.status_code}'}), 500
+        
+        records = response.json().get('records', [])
+        logger.info(f"Retrieved {len(records)} records from Airtable")
+        
+        if not records:
+            return jsonify({'message': 'No records found in Airtable'}), 200
+        
+        # Initialize Pinecone
+        pc = Pinecone(api_key=PINECONE_API_KEY)
+        index = pc.Index("tennis-knowledge-base")
+        
+        processed_count = 0
+        
+        for record in records:
+            try:
+                record_id = record['id']
+                fields = record.get('fields', {})
+                
+                # Get content for embedding (combine available text fields)
+                content_parts = []
+                for field in ['Video Title', 'Full Transcript', 'Short Summary']:
+                    if field in fields and fields[field]:
+                        content_parts.append(str(fields[field]))
+                
+                if not content_parts:
+                    logger.warning(f"No content found for record {record_id}")
+                    continue
+                
+                content_text = " ".join(content_parts)
+                logger.info(f"Processing record {record_id}: {content_text[:100]}...")
+                
+                # Generate embedding with OpenAI
+                openai_url = "https://api.openai.com/v1/embeddings"
+                openai_headers = {
+                    'Authorization': f'Bearer {OPENAI_API_KEY}',
+                    'Content-Type': 'application/json'
+                }
+                openai_data = {
+                    'input': content_text,
+                    'model': 'text-embedding-3-large'
+                }
+                
+                embedding_response = requests.post(openai_url, headers=openai_headers, json=openai_data)
+                
+                if embedding_response.status_code != 200:
+                    logger.error(f"OpenAI API error for record {record_id}: {embedding_response.text}")
+                    continue
+                
+                embedding_data = embedding_response.json()
+                embedding = embedding_data['data'][0]['embedding']
+                
+                logger.info(f"Generated {len(embedding)} dimension embedding for record {record_id}")
+                
+                # Prepare metadata
+                metadata = {
+                    'content_id': record_id,
+                    'video_title': str(fields.get('Video Title', ''))[:200],
+                    'short_summary': str(fields.get('Short Summary', ''))[:300],
+                    'youtube_url': str(fields.get('YouTube URL', ''))
+                }
+                
+                # Store in Pinecone
+                vector_id = f"tennis-{record_id}"
+                index.upsert(vectors=[(vector_id, embedding, metadata)])
+                
+                logger.info(f"SUCCESS: Stored vector {vector_id} in Pinecone")
+                processed_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error processing record {record_id}: {str(e)}")
+                continue
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Processed {processed_count} records successfully',
+            'total_records': len(records),
+            'processed_records': processed_count
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in process_airtable: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
