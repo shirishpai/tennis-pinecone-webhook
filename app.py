@@ -20,8 +20,8 @@ def store_vector():
         logger.info(f"Content-Type: {request.content_type}")
         logger.info(f"Raw data: {request.get_data(as_text=True)}")
         
-        data = request.get_json(force=True)
-        
+        try:
+            data = request.get_json(force=True)
         except Exception as json_error:
             logger.error(f"JSON parsing error: {json_error}")
             return jsonify({'error': f'Invalid JSON: 400 Bad Request: The browser (or proxy) sent a request that this server could not understand.'}), 400
