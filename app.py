@@ -85,6 +85,3 @@ def store_vector():
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
